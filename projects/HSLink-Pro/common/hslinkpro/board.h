@@ -33,6 +33,8 @@
 #define SETTING_E2P_SECTOR_CNT     (32)
 #define SETTING_E2P_MANEGE_SIZE    (SETTING_E2P_ERASE_SIZE * SETTING_E2P_SECTOR_CNT)    // 128K
 #define SETTING_E2P_MANAGE_OFFSET  (BOARD_FLASH_SIZE - BL_SIZE - SETTING_E2P_MANEGE_SIZE - BL_B_SLOT_SIZE)    // 1M - 0x20000 - 256K = 640K
+#define BL_OFFSET (0x400)
+#define BL_B_SLOT_OFFSET    (BOARD_FLASH_SIZE - BL_B_SLOT_SIZE) // 1M - 128K = 896K
 
 static const char *const e2p_hw_ver_name = "hw_ver";
 static const uint32_t HARDWARE_VER_ADDR = 70;
@@ -54,6 +56,12 @@ extern "C" {
  * @return 如果硬件版本号相同，返回true，否则返回false
  */
 bool CheckHardwareVersion(uint8_t major, uint8_t minor, uint8_t patch);
+
+uint32_t board_flash_read(uint8_t *buf, uint32_t addr, uint32_t size);
+
+uint32_t board_flash_write(uint8_t *buf, uint32_t addr, uint32_t size);
+
+void board_flash_erase(uint32_t start_addr, uint32_t size);
 
 #ifdef __cplusplus
 }
@@ -351,6 +359,8 @@ void board_init_clock(void);
 void board_delay_us(uint32_t us);
 
 void board_delay_ms(uint32_t ms);
+
+uint32_t millis(void);
 
 void board_timer_create(uint32_t ms, board_timer_cb cb);
 

@@ -39,8 +39,6 @@ const uint8_t DEFAULT_ADC_CYCLE = 20;
 
 static uint32_t pwm_current_reload;
 
-static uint64_t MCHTMR_CLK_FREQ = 0;
-
 static const uint32_t CONFIG_P_EN = IOC_PAD_PA31;
 
 static void set_pwm_waveform_edge_aligned_frequency(uint32_t freq) {
@@ -381,11 +379,6 @@ extern "C" void WS2812_ShowRainbow() {
 }
 #endif
 
-static uint32_t millis(void) {
-    uint64_t mchtmr_count = mchtmr_get_count(HPM_MCHTMR);
-    return (uint32_t) (mchtmr_count * 1000 / MCHTMR_CLK_FREQ);
-}
-
 static void Button_Init() {
     static Button btn;
     button_init(&btn, [](uint8_t) {
@@ -409,7 +402,6 @@ static void Button_Init() {
 }
 
 extern "C" void HSP_Init(void) {
-    MCHTMR_CLK_FREQ = clock_get_frequency(clock_mchtmr0);
     // 初始化电源部分
     Power_Enable_Init();
     Port_Enable_Init();

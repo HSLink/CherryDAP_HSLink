@@ -4,6 +4,7 @@
 #include "setting.h"
 #include "usb_configuration.h"
 #include "HSLink_Pro_expansion.h"
+#include "b64.h"
 
 #ifdef CONFIG_USE_HID_CONFIG
 
@@ -15,6 +16,14 @@ using namespace rapidjson;
 
 #include <unordered_map>
 #include <functional>
+#include "memory"
+#include <hpm_nor_flash.h>
+#include <hpm_crc32.h>
+#include <crc32.h>
+
+#define LOG_TAG "HID_Msg"
+
+#include "elog.h"
 
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t HID_read_buffer[HID_PACKET_SIZE];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t HID_write_buffer[HID_PACKET_SIZE];
@@ -33,6 +42,8 @@ const char *response_str[] = {
         "success",
         "failed"
 };
+
+std::string_view filed_miss_msg = "Some fields are missing";
 
 static volatile HID_State_t HID_ReadState = HID_STATE_BUSY;
 
@@ -93,6 +104,26 @@ struct usbd_endpoint hid_custom_out_ep = {
         .ep_cb = usbd_hid_custom_out_callback,
 };
 
+static bool CheckField(const Value &object, std::pair<std::string_view, Type> field) {
+    auto &[field_name, field_type] = field;
+    if (!object.HasMember(field_name.data())) {
+        return false;
+    }
+    if (object[field_name.data()].GetType() != field_type) {
+        return false;
+    }
+    return true;
+}
+
+static bool CheckFields(const Value &object, std::vector<std::pair<std::string_view, Type>> fields) {
+    for (auto &field: fields) {
+        if (!CheckField(object, field)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void FillStatus(HID_Response_t status, char *res, const char *message) {
     StringBuffer buffer;
     Writer writer(buffer);
@@ -103,6 +134,10 @@ static void FillStatus(HID_Response_t status, char *res, const char *message) {
     writer.String(message);
     writer.EndObject();
     std::strcpy(res, buffer.GetString());
+}
+
+static void FillStatus(HID_Response_t status, char *res, std::string_view message) {
+    FillStatus(status, res, message.data());
 }
 
 static void FillStatus(HID_Response_t status, char *res) {
@@ -166,49 +201,64 @@ static void Hello(Document &root, char *res) {
 }
 
 static void settings(Document &root, char *res) {
-    if (!root.HasMember("data") || !root["data"].IsObject()) {
-        const char *message = "data not found";
-        USB_LOG_WRN("%s\n", message);
-        FillStatus(HID_RESPONSE_FAILED, res, message);
+    if (!CheckField(root, {"data", Type::kObjectType})) {
+        FillStatus(HID_RESPONSE_FAILED, res, "data not found");
         return;
     }
 
     const Value &data = root["data"].GetObject();
 
-    if (!data.HasMember("boost")) {
-        const char *message = "boost not found";
-        USB_LOG_WRN("%s\n", message);
-        FillStatus(HID_RESPONSE_FAILED, res, message);
-        return;
+    if (CheckField(data, {"boost", Type::kTrueType}) or
+        CheckField(data, {"boost", Type::kFalseType})) {
+        HSLink_Setting.boost = data["boost"].GetBool();
     }
-    HSLink_Setting.boost = data["boost"].GetBool();
-    auto mode = [](const char *mode) {
+
+    auto _get_mode_fn = [](const char *mode) {
         if (strcmp(mode, "spi") == 0) {
             return PORT_MODE_SPI;
         }
         return PORT_MODE_GPIO;
     };
-    HSLink_Setting.swd_port_mode = mode(data["swd_port_mode"].GetString());
-    HSLink_Setting.jtag_port_mode = mode(data["jtag_port_mode"].GetString());
+    if (CheckField(data, {"swd_port_mode", Type::kStringType})) {
+        HSLink_Setting.swd_port_mode = _get_mode_fn(data["swd_port_mode"].GetString());
+    }
+    if (CheckField(data, {"jtag_port_mode", Type::kStringType})) {
+        HSLink_Setting.jtag_port_mode = _get_mode_fn(data["jtag_port_mode"].GetString());
+    }
 
-    const Value &power = data["power"];
-    HSLink_Setting.power.voltage = power["vref"].GetDouble();
-    HSLink_Setting.power.power_on = power["power_on"].GetBool();
-    HSLink_Setting.power.port_on = power["port_on"].GetBool();
-
-    for (auto &reset: data["reset"].GetArray()) {
-        if (!SETTING_GET_RESET_MODE(HSLink_Setting.reset, RESET_NRST) && strcmp(reset.GetString(), "nrst") == 0) {
-            SETTING_SET_RESET_MODE(HSLink_Setting.reset, RESET_NRST);
-        } else if (!SETTING_GET_RESET_MODE(HSLink_Setting.reset, RESET_POR) && strcmp(reset.GetString(), "por") == 0) {
-            SETTING_SET_RESET_MODE(HSLink_Setting.reset, RESET_POR);
-        } else if (!SETTING_GET_RESET_MODE(HSLink_Setting.reset, RESET_ARM_SWD_SOFT) && strcmp(
-                reset.GetString(), "arm_swd_soft") == 0) {
-            SETTING_SET_RESET_MODE(HSLink_Setting.reset, RESET_ARM_SWD_SOFT);
+    if (CheckField(data, {"power", Type::kObjectType})) {
+        const Value &power = data["power"];
+        if (CheckField(power, {"vref", Type::kNumberType})) {
+            HSLink_Setting.power.voltage = power["vref"].GetDouble();
+        }
+        if (CheckField(power, {"power_on", Type::kTrueType}) or CheckField(power, {"power_on", Type::kFalseType})) {
+            HSLink_Setting.power.power_on = power["power_on"].GetBool();
+        }
+        if (CheckField(power, {"port_on", Type::kTrueType}) or CheckField(power, {"port_on", Type::kFalseType})) {
+            HSLink_Setting.power.port_on = power["port_on"].GetBool();
         }
     }
 
-    HSLink_Setting.led = data["led"].GetBool();
-    HSLink_Setting.led_brightness = data["led_brightness"].GetUint();
+    if (CheckField(data, {"reset", Type::kArrayType})) {
+        for (auto &reset: data["reset"].GetArray()) {
+            if (!SETTING_GET_RESET_MODE(HSLink_Setting.reset, RESET_NRST) && strcmp(reset.GetString(), "nrst") == 0) {
+                SETTING_SET_RESET_MODE(HSLink_Setting.reset, RESET_NRST);
+            } else if (!SETTING_GET_RESET_MODE(HSLink_Setting.reset, RESET_POR) &&
+                       strcmp(reset.GetString(), "por") == 0) {
+                SETTING_SET_RESET_MODE(HSLink_Setting.reset, RESET_POR);
+            } else if (!SETTING_GET_RESET_MODE(HSLink_Setting.reset, RESET_ARM_SWD_SOFT) && strcmp(
+                    reset.GetString(), "arm_swd_soft") == 0) {
+                SETTING_SET_RESET_MODE(HSLink_Setting.reset, RESET_ARM_SWD_SOFT);
+            }
+        }
+    }
+
+    if (CheckField(data, {"led", Type::kTrueType}) or CheckField(data, {"led", Type::kFalseType})) {
+        HSLink_Setting.led = data["led"].GetBool();
+    }
+    if (CheckField(data, {"led_brightness", Type::kNumberType})) {
+        HSLink_Setting.led_brightness = data["led_brightness"].GetUint();
+    }
 
     Setting_Save();
 
@@ -216,12 +266,11 @@ static void settings(Document &root, char *res) {
 }
 
 static void set_nickname(Document &root, char *res) {
-    if (!root.HasMember("nickname") || !root["nickname"].IsString()) {
-        const char *message = "nickname not found";
-        USB_LOG_WRN("%s\n", message);
-        FillStatus(HID_RESPONSE_FAILED, res, message);
+    if (!CheckField(root, {"nickname", Type::kStringType})) {
+        FillStatus(HID_RESPONSE_FAILED, res, "nickname not found");
         return;
     }
+
     std::memset(HSLink_Setting.nickname, 0, sizeof(HSLink_Setting.nickname));
     std::strcpy(HSLink_Setting.nickname, root["nickname"].GetString());
 
@@ -258,12 +307,11 @@ static void entry_hslink_bl(Document &root, char *res) {
 }
 
 static void set_hw_ver(Document &root, char *res) {
-    if (!root.HasMember("hw_ver") || !root["hw_ver"].IsString()) {
-        const char *message = "hw_ver not found";
-        USB_LOG_WRN("%s\n", message);
-        FillStatus(HID_RESPONSE_FAILED, res, message);
+    if (!CheckField(root, {"hw_ver", Type::kStringType})) {
+        FillStatus(HID_RESPONSE_FAILED, res, "hw_ver not found");
         return;
     }
+
     auto hw_ver_s = std::string{root["hw_ver"].GetString()};
     size_t pos1 = hw_ver_s.find('.');
     size_t pos2 = hw_ver_s.find('.', pos1 + 1);
@@ -327,6 +375,143 @@ static void get_setting(Document &root, char *res) {
     std::strcpy(res, buffer.GetString());
 }
 
+static void erase_bl_b(Document &root, char *res) {
+    board_flash_erase(BL_B_SLOT_OFFSET + BOARD_FLASH_BASE_ADDRESS, BL_B_SLOT_SIZE);
+    FillStatus(HID_RESPONSE_SUCCESS, res);
+}
+
+static void write_bl_b(Document &root, char *res) {
+#define PACK_SIZE 512
+    if (!CheckFields(root,
+                     {{"addr", Type::kNumberType},
+                      {"len",  Type::kNumberType},
+                      {"data", Type::kStringType}})) {
+        FillStatus(HID_RESPONSE_FAILED, res, filed_miss_msg);
+        return;
+    }
+    auto addr = root["addr"].GetInt();
+    auto len = root["len"].GetInt();
+    auto data_b64 = root["data"].GetString();
+    auto data_b64_len = root["data"].GetStringLength();
+    log_d("addr: 0x%X, len: %d, data_len: %d", addr, len, data_b64_len);
+//    elog_hexdump("b64", 16, data_b64, data_b64_len);
+    if (addr + len > BL_B_SLOT_SIZE) {
+        const char *message = "addr out of range";
+        USB_LOG_WRN("%s\n", message);
+        FillStatus(HID_RESPONSE_FAILED, res, message);
+        return;
+    }
+    if (len % 4 != 0) {
+        log_w("len %d not multiple of 4", len);
+        return;
+    }
+    if (addr % 512 != 0) {
+        log_w("addr %d not multiple of 512", addr);
+        return;
+    }
+    log_i("addr: 0x%X, len: %d", addr, len);
+    size_t data_len = 0;
+    uint8_t *data = b64_decode_ex(data_b64, data_b64_len, &data_len);
+    log_d("solve b64 data_len: %d", data_len);
+//    elog_hexdump(LOG_TAG, 16, data, data_len);
+    if (data_len != len) {
+        log_w("data_len != len");
+        return;
+    }
+    if (data_len > PACK_SIZE) {
+        log_w("data_len > %d", PACK_SIZE);
+        return;
+    }
+    auto write_addr = addr + BL_B_SLOT_OFFSET + BOARD_FLASH_BASE_ADDRESS;
+    disable_global_irq(CSR_MSTATUS_MIE_MASK);
+    board_flash_write(data, write_addr, len);
+    enable_global_irq(CSR_MSTATUS_MIE_MASK);
+    log_i("write %d bytes to 0x%X done", len, write_addr);
+    FillStatus(HID_RESPONSE_SUCCESS, res);
+    free(data);
+}
+
+static void upgrade_bl(Document &root, char *res) {
+    if (!CheckFields(root,
+                     {{"len", Type::kNumberType},
+                      {"crc", Type::kStringType}})) {
+        FillStatus(HID_RESPONSE_FAILED, res, filed_miss_msg);
+        return;
+    }
+    auto len = root["len"].GetInt();
+    auto crc_str = root["crc"].GetString();
+    auto crc = strtoul(crc_str + 2, nullptr, 16);
+    if (len > BL_B_SLOT_SIZE) {
+        log_w("len > %d", BL_B_SLOT_SIZE);
+        return;
+    }
+    if (len % 4) {
+        log_w("len %% 4 != 0");
+        return;
+    }
+
+    {
+        uint32_t crc_calc = 0xFFFFFFFF;
+        const uint32_t CRC_CALC_LEN = 8 * 1024;
+        auto buf = std::make_unique<uint8_t[]>(CRC_CALC_LEN);
+        for (uint32_t i = 0; i < len; i += CRC_CALC_LEN) {
+            auto calc_len = std::min(CRC_CALC_LEN, len - i);
+            board_flash_read(buf.get(), i + BL_B_SLOT_OFFSET + BOARD_FLASH_BASE_ADDRESS, calc_len);
+            crc_calc = CRC_CalcArray_Software(buf.get(), calc_len, crc_calc);
+//        log_d("crc calc 0x%x", crc_calc);
+        }
+        if (crc != crc_calc) {
+            log_w("crc != crc_calc recv 0x%x calc 0x%x", crc, crc_calc);
+            return;
+        }
+    }
+
+    log_d("crc check pass, start copy...");
+    {
+        const uint32_t COPY_LEN = 4 * 1024;
+//        const uint32_t SKIP_COPY = 0x1000;
+        auto buf = std::make_unique<uint8_t[]>(COPY_LEN);
+        disable_global_irq(CSR_MSTATUS_MIE_MASK);
+        board_flash_erase(BOARD_FLASH_BASE_ADDRESS, BL_SIZE);
+//        board_flash_erase(BOARD_FLASH_BASE_ADDRESS + SKIP_COPY, BL_SIZE - SKIP_COPY);
+        for (auto i = 0; i < BL_SIZE; i += COPY_LEN) {
+//            if (i < SKIP_COPY) {
+//                log_d("skip copy 0x%X", i);
+//                continue;
+//            }
+            log_d("copy from 0x%X to 0x%X, size 0x%X",
+                  i + BL_B_SLOT_OFFSET + BOARD_FLASH_BASE_ADDRESS,
+                  i + BOARD_FLASH_BASE_ADDRESS,
+                  COPY_LEN);
+            board_flash_read(buf.get(), i + BL_B_SLOT_OFFSET + BOARD_FLASH_BASE_ADDRESS, COPY_LEN);
+            board_flash_write(buf.get(), i + BL_OFFSET + BOARD_FLASH_BASE_ADDRESS, COPY_LEN);
+        }
+        enable_global_irq(CSR_MSTATUS_MIE_MASK);
+    }
+    log_d("copy done");
+    {
+        const uint32_t COPY_LEN = 512;
+        auto buf_1 = std::make_unique<uint8_t[]>(COPY_LEN);
+        auto buf_2 = std::make_unique<uint8_t[]>(COPY_LEN);
+        disable_global_irq(CSR_MSTATUS_MIE_MASK);
+        for (auto i = 0; i < BL_SIZE; i += COPY_LEN) {
+            board_flash_read(buf_1.get(), i + BL_B_SLOT_OFFSET + BOARD_FLASH_BASE_ADDRESS, COPY_LEN);
+            board_flash_read(buf_2.get(), i + BL_OFFSET + BOARD_FLASH_BASE_ADDRESS, COPY_LEN);
+            if (memcmp(buf_1.get(), buf_2.get(), COPY_LEN) != 0) {
+                log_w("copy fail at 0x%X", i);
+                log_d("in b slot");
+                elog_hexdump(LOG_TAG, 16, buf_1.get(), COPY_LEN);
+                log_d("in bl");
+                elog_hexdump(LOG_TAG, 16, buf_2.get(), COPY_LEN);
+            }
+        }
+        enable_global_irq(CSR_MSTATUS_MIE_MASK);
+    }
+
+    log_d("check done");
+
+}
+
 static void HID_Write(const std::string &res) {
     std::strcpy(reinterpret_cast<char *>(HID_write_buffer + 1), res.c_str());
 }
@@ -351,7 +536,10 @@ void HID_Handle() {
             {"upgrade",         upgrade},
             {"entry_sys_bl",    entry_sys_bl},
             {"entry_hslink_bl", entry_hslink_bl},
-            {"set_hw_ver",      set_hw_ver}
+            {"set_hw_ver",      set_hw_ver},
+            {"erase_bl_b",      erase_bl_b},
+            {"write_bl_b",      write_bl_b},
+            {"upgrade_bl",      upgrade_bl}
     };
 
     Document root;
@@ -359,7 +547,7 @@ void HID_Handle() {
     root.Parse(parse);
     [&]() {
         if (root.HasParseError()
-            || root.HasMember("name") == false
+            || !root.HasMember("name")
                 ) {
             HID_Write("parse error!\n");
             return;

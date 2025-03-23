@@ -5,6 +5,7 @@
  */
 
 #include <eeprom_emulation.h>
+#include <hpm_mchtmr_drv.h>
 #include "board.h"
 #include "hpm_uart_drv.h"
 #include "hpm_sdk_version.h"
@@ -15,6 +16,12 @@
 #include "hpm_pllctlv2_drv.h"
 #include "hpm_i2c_drv.h"
 #include "hpm_pcfg_drv.h"
+
+#if defined(CONFIG_USE_ELOG)
+
+#include "elog.h"
+
+#endif
 
 static board_timer_cb timer_cb;
 
@@ -79,6 +86,8 @@ __attribute__ ((section(".nor_cfg_option"), used)) const uint32_t option[4] = {0
 ATTR_PLACE_AT(".uf2_signature") __attribute__((used)) const uint32_t uf2_signature = BOARD_UF2_SIGNATURE;
 #endif
 
+static uint32_t MCHTMR_CLK_FREQ;
+
 void board_init_console(void) {
 #if !defined(CONFIG_NDEBUG_CONSOLE) || !CONFIG_NDEBUG_CONSOLE
 #if BOARD_CONSOLE_TYPE == CONSOLE_TYPE_UART
@@ -141,38 +150,42 @@ void board_print_clock_freq(void) {
     printf("==============================\n");
 }
 
-static e2p_t e2p;
+static e2p_t e2p_cfg;
+static nor_flash_config_t nor_cfg;
 
-static uint32_t setting_e2p_read(uint8_t *buf, uint32_t addr, uint32_t size) {
-    return nor_flash_read(&e2p.nor_config, buf, addr, size);
+uint32_t board_flash_read(uint8_t *buf, uint32_t addr, uint32_t size) {
+    return nor_flash_read(&nor_cfg, buf, addr, size);
 }
 
-static uint32_t setting_e2p_write(uint8_t *buf, uint32_t addr, uint32_t size) {
-    return nor_flash_write(&e2p.nor_config, buf, addr, size);
+uint32_t board_flash_write(uint8_t *buf, uint32_t addr, uint32_t size) {
+    return nor_flash_write(&nor_cfg, buf, addr, size);
 }
 
-static void setting_e2p_erase(uint32_t start_addr, uint32_t size) {
-    nor_flash_erase(&e2p.nor_config, start_addr, size);
+void board_flash_erase(uint32_t start_addr, uint32_t size) {
+    nor_flash_erase(&nor_cfg, start_addr, size);
 }
 
 static void e2p_init() {
+    nor_cfg.xpi_base = BOARD_APP_XPI_NOR_XPI_BASE;
+    nor_cfg.base_addr = BOARD_FLASH_BASE_ADDRESS;
+    nor_cfg.opt_header = BOARD_APP_XPI_NOR_CFG_OPT_HDR;
+    nor_cfg.opt0 = BOARD_APP_XPI_NOR_CFG_OPT_OPT0;
+    nor_cfg.opt1 = BOARD_APP_XPI_NOR_CFG_OPT_OPT1;
+
+    e2p_cfg.config.start_addr = e2p_cfg.nor_config.base_addr + SETTING_E2P_MANAGE_OFFSET;
+    e2p_cfg.config.erase_size = SETTING_E2P_ERASE_SIZE;
+    e2p_cfg.config.sector_cnt = SETTING_E2P_SECTOR_CNT;
+    e2p_cfg.config.version = 0x4553; /* 'E' 'S' */
+    e2p_cfg.config.flash_read = board_flash_read;
+    e2p_cfg.config.flash_write = board_flash_write;
+    e2p_cfg.config.flash_erase = board_flash_erase;
+    e2p_cfg.nor_config = nor_cfg;
+
     disable_global_irq(CSR_MSTATUS_MIE_MASK);
 
-    e2p.nor_config.xpi_base = BOARD_APP_XPI_NOR_XPI_BASE;
-    e2p.nor_config.base_addr = BOARD_FLASH_BASE_ADDRESS;
-    e2p.config.start_addr = e2p.nor_config.base_addr + SETTING_E2P_MANAGE_OFFSET;
-    e2p.config.erase_size = SETTING_E2P_ERASE_SIZE;
-    e2p.config.sector_cnt = SETTING_E2P_SECTOR_CNT;
-    e2p.config.version = 0x4553; /* 'E' 'S' */
-    e2p.nor_config.opt_header = BOARD_APP_XPI_NOR_CFG_OPT_HDR;
-    e2p.nor_config.opt0 = BOARD_APP_XPI_NOR_CFG_OPT_OPT0;
-    e2p.nor_config.opt1 = BOARD_APP_XPI_NOR_CFG_OPT_OPT1;
-    e2p.config.flash_read = setting_e2p_read;
-    e2p.config.flash_write = setting_e2p_write;
-    e2p.config.flash_erase = setting_e2p_erase;
+    nor_flash_init(&nor_cfg);
 
-    nor_flash_init(&e2p.nor_config);
-    e2p_config(&e2p);
+    e2p_config(&e2p_cfg);
 
     enable_global_irq(CSR_MSTATUS_MIE_MASK);
 }
@@ -218,6 +231,19 @@ void board_init(void) {
     board_init_clock();
     board_init_console();
     board_init_pmp();
+
+#if defined(CONFIG_USE_ELOG)
+    elog_init();
+
+    elog_set_fmt(ELOG_LVL_ASSERT, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
+    elog_set_fmt(ELOG_LVL_ERROR, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
+    elog_set_fmt(ELOG_LVL_WARN, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
+    elog_set_fmt(ELOG_LVL_INFO, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
+    elog_set_fmt(ELOG_LVL_DEBUG, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
+    elog_set_fmt(ELOG_LVL_VERBOSE, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
+
+    elog_start();
+#endif
 
     e2p_init();
     load_hardware_version();
@@ -305,6 +331,8 @@ void board_init_clock(void) {
     clock_set_source_divider(clock_mchtmr0, clk_src_osc24m, 1);
     clock_set_source_divider(clock_gptmr0, clk_src_pll1_clk0, 8);
     clock_set_source_divider(clock_gptmr1, clk_src_pll1_clk0, 8);
+
+    MCHTMR_CLK_FREQ = clock_get_frequency(clock_mchtmr0);
 }
 
 void board_delay_us(uint32_t us) {
@@ -313,6 +341,11 @@ void board_delay_us(uint32_t us) {
 
 void board_delay_ms(uint32_t ms) {
     clock_cpu_delay_ms(ms);
+}
+
+uint32_t millis(void) {
+    uint64_t mchtmr_count = mchtmr_get_count(HPM_MCHTMR);
+    return (uint32_t) (mchtmr_count * 1000 / MCHTMR_CLK_FREQ);
 }
 
 SDK_DECLARE_EXT_ISR_M(BOARD_CALLBACK_TIMER_IRQ, board_timer_isr)

@@ -8,3 +8,14 @@ sdk_app_src(port/tlsf/malloc.c)
 add_subdirectory(${THIRD_PARTY_COMPONENTS_DIR}/rapidjson ${CMAKE_CURRENT_BINARY_DIR}/rapidjson)
 
 add_subdirectory(${THIRD_PARTY_COMPONENTS_DIR}/multibutton ${CMAKE_CURRENT_BINARY_DIR}/multibutton)
+
+add_subdirectory(${THIRD_PARTY_COMPONENTS_DIR}/base64 ${CMAKE_CURRENT_BINARY_DIR}/base64)
+
+if (CONFIG_USE_ELOG)
+    sdk_compile_options(-DCONFIG_USE_ELOG=1)
+    sdk_inc(port/easylogger)
+    sdk_src(port/easylogger/elog_port.c)
+    add_subdirectory(${THIRD_PARTY_COMPONENTS_DIR}/EasyLogger ${CMAKE_CURRENT_BINARY_DIR}/EasyLogger)
+endif ()
+
+add_subdirectory(${THIRD_PARTY_COMPONENTS_DIR}/crc32 ${CMAKE_CURRENT_BINARY_DIR}/crc32)

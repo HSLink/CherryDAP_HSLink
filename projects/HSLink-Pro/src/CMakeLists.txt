@@ -13,6 +13,9 @@ set(BOARD_SEARCH_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../common)
 set(CONFIG_USB_DEVICE 1)
 set(CONFIG_DMA_MGR 1)
 set(CONFIG_HPM_SPI 1)
+set(CONFIG_EEPROM_EMULATION 1)
+
+set(CONFIG_USE_ELOG 1)
 
 set(CUSTOM_GCC_LINKER_FILE
         ${CMAKE_CURRENT_SOURCE_DIR}/flash_uf2.ld
@@ -26,8 +29,6 @@ if (NOT DEFINED CONFIG_USE_HPM_BOARD_JTAG_GPIO OR (CONFIG_USE_HPM_BOARD_JTAG_GPI
     set(CONFIG_USE_SPI_JTAG 1)
 endif ()
 
-set(CONFIG_EEPROM_EMULATION 1)
-set(HEAP_SIZE 0x8000)
 set(STACK_SIZE 0x5000)
 
 #set(HPM_SDK_LD_NO_NANO_SPECS 1)
@@ -42,6 +43,22 @@ if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.version)
     string(STRIP ${BUILD_VERSION} BUILD_VERSION)
     set(CONFIG_BUILD_VERSION ${BUILD_VERSION})
 endif ()
+if (CONFIG_BUILD_VERSION)
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION="${CONFIG_BUILD_VERSION}")
+    string(REGEX REPLACE "([0-9]+)\\..*" "\\1" VERSION_MAJOR ${CONFIG_BUILD_VERSION})
+    string(REGEX REPLACE "[0-9]+\\.([0-9]+)\\..*" "\\1" VERSION_MINOR ${CONFIG_BUILD_VERSION})
+    string(REGEX REPLACE "[0-9]+\\.[0-9]+\\.([0-9]+)" "\\1" VERSION_PATCH ${CONFIG_BUILD_VERSION})
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MAJOR=${VERSION_MAJOR})
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MINOR=${VERSION_MINOR})
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_PATCH=${VERSION_PATCH})
+else ()
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION="Debug")
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MAJOR=0xFF)
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MINOR=0xFF)
+    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_PATCH=0xFF)
+endif ()
+
+sdk_compile_definitions(-DMBEDTLS_CONFIG_FILE="hpm_sdk_mbedtls_config.h")
 
 # for sync, use cherryusb from cherryDAP instead of hpm sdk middleware
 sdk_compile_definitions(-DCONFIG_USB_HS)
@@ -94,21 +111,6 @@ sdk_app_src(../../../CherryRB/chry_ringbuffer.c)
 sdk_app_src(main.cpp)
 sdk_app_src(dp_common.c)
 sdk_app_src(setting.c)
-
-if (CONFIG_BUILD_VERSION)
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION="${CONFIG_BUILD_VERSION}")
-    string(REGEX REPLACE "([0-9]+)\\..*" "\\1" VERSION_MAJOR ${CONFIG_BUILD_VERSION})
-    string(REGEX REPLACE "[0-9]+\\.([0-9]+)\\..*" "\\1" VERSION_MINOR ${CONFIG_BUILD_VERSION})
-    string(REGEX REPLACE "[0-9]+\\.[0-9]+\\.([0-9]+)" "\\1" VERSION_PATCH ${CONFIG_BUILD_VERSION})
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MAJOR=${VERSION_MAJOR})
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MINOR=${VERSION_MINOR})
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_PATCH=${VERSION_PATCH})
-else ()
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION="Debug")
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MAJOR=0xFF)
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_MINOR=0xFF)
-    sdk_compile_definitions(-DCONFIG_BUILD_VERSION_PATCH=0xFF)
-endif ()
 
 sdk_app_src(swd_host/swd_host.c)
 sdk_app_inc(swd_host)
