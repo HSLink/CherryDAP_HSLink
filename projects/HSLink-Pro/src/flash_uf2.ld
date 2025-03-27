@@ -12,7 +12,8 @@ E2P_EM_SIZE = 128 * 1024;
 
 MEMORY
 {
-    XPI0 (rx) : ORIGIN = 0x80000000 + BL_SIZE, LENGTH = _flash_size - BL_SIZE - BL_B_SLOT_SIZE - E2P_EM_SIZE
+    XPI0 (rx) : ORIGIN = 0x80000000 + BL_SIZE, LENGTH = 400K
+    NEW_BL_PATH (r): ORIGIN = 0x80078000, LENGTH = 128K
     ILM (wx) : ORIGIN = 0x00000000, LENGTH = 128K
     DLM (w) : ORIGIN = 0x00080300, LENGTH = 128K - 768
     AHB_SRAM (w) : ORIGIN = 0xF0400000, LENGTH = 32k
@@ -296,4 +297,8 @@ SECTIONS
     __last_addr__ = __fast_ram_init_load_addr__ + SIZEOF(.fast_ram.init);
     ASSERT(((__fw_size__ <= LENGTH(XPI0)) && (__last_addr__ <= (ORIGIN(XPI0) + LENGTH(XPI0)))), "******  FAILED! XPI0 has not enough space!  ******")
 
+    .new_bl : {
+        PROVIDE(__new_bl_start__ = .);
+        KEEP(*(.new_bl));
+    } >NEW_BL_PATH
 }

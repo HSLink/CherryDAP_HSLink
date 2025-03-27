@@ -5,17 +5,23 @@
 #include "setting.h"
 #include "usb2uart.h"
 #include "usb_configuration.h"
-#include <elog.h>
+#include <eeprom_emulation.h>
 #include <hid_comm.h>
 #include <hpm_dma_mgr.h>
 #include <hpm_ewdg_drv.h>
 #include <hpm_gpio_drv.h>
 #include <hpm_gpiom_drv.h>
+#include <hpm_nor_flash.h>
 #include <hpm_romapi.h>
+#include <memory>
+
+#define LOG_TAG "main"
+
+#include "elog.h"
 
 static void serial_number_init(void) {
 #define OTP_CHIP_UUID_IDX_START (88U)
-#define OTP_CHIP_UUID_IDX_END   (91U)
+#define OTP_CHIP_UUID_IDX_END (91U)
     uint32_t uuid_words[4];
 
     uint32_t word_idx = 0;
@@ -57,11 +63,82 @@ static void EWDG_Init() {
     }
 }
 
-[[noreturn]] // make compiler happy
-int main() {
+extern void WS2812_Init(void);
+
+extern e2p_t e2p;
+constexpr uint32_t BL_OFFSET = 0x400;
+//extern uint8_t *__new_bl_start__;
+uint32_t NEW_BL_PATH = (uint32_t) 0x80078000;
+const uint32_t option[4] = {0xfcf90002, 0x00000006, 0x1000, 0x0};
+
+#include "bl/HSLink-Pro-Bootloader.h"
+
+[[noreturn]]// make compiler happy
+int
+main() {
     board_init();
     EWDG_Init();
-    board_delay_ms(500);
+    WS2812_Init();
+    if (bl_setting.bl_version.major >= 2) {
+        log_d("already upgraded");
+        for (auto i = 0; i < 3; i++) {
+            neopixel->SetPixel(0, 0, 0xFF / 8, 0);
+            neopixel->Flush();
+            board_delay_ms(500);
+            neopixel->SetPixel(0, 0, 0, 0);
+            neopixel->Flush();
+            board_delay_ms(500);
+            ewdg_refresh(HPM_EWDG0);
+        }
+        HSP_EnterHSLinkBootloader();
+    } else {
+        log_d("upgrading bootloader...");
+        auto nor_cfg = (uint32_t *) malloc(sizeof(option));
+        log_d("checking fw header...");
+        nor_flash_read(&e2p.nor_config, reinterpret_cast<uint8_t *>(nor_cfg), NEW_BL_PATH, sizeof(option));
+        elog_hexdump(LOG_TAG, 16, nor_cfg, sizeof(option));
+        if (memcmp(nor_cfg, option, sizeof(option)) != 0) {
+            log_e("fw header mismatch! No upgrade!");
+            for (auto i = 0; i < 3; i++) {
+                neopixel->SetPixel(0, 0xFF / 8, 0, 0);
+                neopixel->Flush();
+                board_delay_ms(500);
+                neopixel->SetPixel(0, 0, 0, 0);
+                neopixel->Flush();
+                board_delay_ms(500);
+                ewdg_refresh(HPM_EWDG0);
+            }
+            HSP_EnterHSLinkBootloader();
+        }
+        log_d("fw header check pass");
+        {
+            const uint32_t COPY_LEN = 4 * 1024;
+            auto buf = std::make_unique<uint8_t[]>(COPY_LEN);
+            disable_global_irq(CSR_MSTATUS_MIE_MASK);
+            nor_flash_erase(&e2p.nor_config, 0, 128 * 1024);
+            for (auto i = 0; i < 127 * 1024; i += COPY_LEN) {
+                auto copy_len = std::min(COPY_LEN, uint32_t(127 * 1024 - i));
+                log_d("copy from 0x%X to 0x%X, size 0x%X",
+                      i + NEW_BL_PATH + BOARD_FLASH_BASE_ADDRESS,
+                      i + BL_OFFSET + BOARD_FLASH_BASE_ADDRESS,
+                      copy_len);
+                nor_flash_read(&e2p.nor_config, buf.get(), i + NEW_BL_PATH , copy_len);
+                nor_flash_write(&e2p.nor_config, buf.get(), i + BL_OFFSET, copy_len);
+            }
+            enable_global_irq(CSR_MSTATUS_MIE_MASK);
+        }
+        log_d("copy done");
+        for (auto i = 0; i < 3; i++) {
+            neopixel->SetPixel(0, 0, 0xFF / 8, 0);
+            neopixel->Flush();
+            board_delay_ms(500);
+            neopixel->SetPixel(0, 0, 0, 0);
+            neopixel->Flush();
+            board_delay_ms(500);
+            ewdg_refresh(HPM_EWDG0);
+        }
+        HSP_Reboot();
+    }
     serial_number_init();
     board_init_usb(HPM_USB0);
     dma_mgr_init();

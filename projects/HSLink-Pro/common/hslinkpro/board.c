@@ -148,7 +148,7 @@ void board_print_clock_freq(void) {
     printf("==============================\n");
 }
 
-static e2p_t e2p;
+e2p_t e2p;
 
 static uint32_t setting_e2p_read(uint8_t *buf, uint32_t addr, uint32_t size) {
     return nor_flash_read(&e2p.nor_config, buf, addr, size);
