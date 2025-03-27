@@ -5,6 +5,7 @@
 #include "setting.h"
 #include "usb2uart.h"
 #include "usb_configuration.h"
+#include <boot/hpm_bootheader.h>
 #include <eeprom_emulation.h>
 #include <hid_comm.h>
 #include <hpm_dma_mgr.h>
@@ -70,6 +71,7 @@ constexpr uint32_t BL_OFFSET = 0x400;
 //extern uint8_t *__new_bl_start__;
 uint32_t NEW_BL_PATH = (uint32_t) 0x80078000;
 const uint32_t option[4] = {0xfcf90002, 0x00000006, 0x1000, 0x0};
+fw_info_table_t table = {};
 
 #include "bl/HSLink-Pro-Bootloader.h"
 
@@ -79,7 +81,12 @@ main() {
     board_init();
     EWDG_Init();
     WS2812_Init();
-    if (bl_setting.bl_version.major >= 2) {
+
+    nor_flash_read(&e2p.nor_config, reinterpret_cast<uint8_t *>(&table), 0x80000000 + 0x1000 + sizeof(boot_header_t), sizeof(fw_info_table_t));
+
+    log_d("read table load_addr: 0x%X", table.load_addr);
+
+    if (table.load_addr != 0x80000000 + 0x3000) {
         log_d("already upgraded");
         for (auto i = 0; i < 3; i++) {
             neopixel->SetPixel(0, 0, 0xFF / 8, 0);
@@ -90,6 +97,7 @@ main() {
             board_delay_ms(500);
             ewdg_refresh(HPM_EWDG0);
         }
+        bl_setting.fail_cnt = 0;
         HSP_EnterHSLinkBootloader();
     } else {
         log_d("upgrading bootloader...");
@@ -137,6 +145,7 @@ main() {
             board_delay_ms(500);
             ewdg_refresh(HPM_EWDG0);
         }
+        bl_setting.fail_cnt = 0;
         HSP_Reboot();
     }
     serial_number_init();
