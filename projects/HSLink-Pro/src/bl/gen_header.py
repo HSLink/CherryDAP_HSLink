@@ -12,6 +12,7 @@ with open(input_file, "rb") as f:
 
 with open(output_file, "w") as f:
     f.write("#ifndef BINFILE_H\n#define BINFILE_H\n\n")
+    f.write('__attribute__((used, section(".new_bl")))\n')
     f.write("const unsigned char binfile[] = {\n")
     for i, byte in enumerate(binary_data):
         if i % 12 == 0:
