@@ -466,13 +466,13 @@ extern "C" void HSP_Loop(void) {
         double vref = Get_VREF_Voltage();
 
         if (vref > 1.6) {
-            Power_Set_TVCC_Voltage(vref);
+            Power_Set_TVCC_Voltage( (HSLink_Setting.power.vref == 0) ? vref : HSLink_Setting.power.vref );
             Power_Turn(true);
             Port_Turn(true);
             VREF_ENABLE = true;
         } else {
             Power_Turn(HSLink_Setting.power.power_on);
-            Power_Set_TVCC_Voltage(HSLink_Setting.power.vref); // TVCC恢复默认设置
+            Power_Set_TVCC_Voltage( (HSLink_Setting.power.vref == 0) ? vref : HSLink_Setting.power.vref );
             Port_Turn(HSLink_Setting.power.port_on);
             VREF_ENABLE = false;
         }
